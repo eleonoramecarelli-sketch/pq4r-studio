@@ -1927,10 +1927,16 @@
         +'<div id="link-form-'+qi+'" style="display:none;margin-top:6px;padding:10px;background:var(--bg2);border-radius:var(--radius-sm);"></div>'
         +'</div>';
 
-      // ── MAPPA: occupa tutto lo spazio rimanente ──
-      var mapH = 'calc(100vh - 200px)';
-      var mapArea = '<div id="map-wrap-'+qi+'" style="border-top:none;background:var(--bg);overflow:auto;-webkit-overflow-scrolling:touch;">'
-        +'<svg id="mapsvg-'+qi+'" viewBox="0 0 700 600" style="min-width:600px;width:100%;height:'+mapH+';min-height:400px;display:block;touch-action:none;"></svg>'
+      // ── MAPPA: occupa tutto lo spazio disponibile ──
+      var isDesktop = window.innerWidth >= 900;
+      var mapH = isDesktop
+        ? 'calc(100vh - 52px)'          // desktop: tutta l'altezza meno header
+        : 'calc(100vh - 200px)';        // mobile/tablet: lascia spazio ai controlli
+      var mapVW = isDesktop ? '1400' : '700';
+      var mapVH = isDesktop ? '900' : '600';
+
+      var mapArea = '<div id="map-wrap-'+qi+'" style="background:var(--bg);overflow:auto;-webkit-overflow-scrolling:touch;flex:1;min-width:0;">'
+        +'<svg id="mapsvg-'+qi+'" viewBox="0 0 '+mapVW+' '+mapVH+'" style="min-width:'+mapVW+'px;width:100%;height:'+mapH+';min-height:400px;display:block;touch-action:none;"></svg>'
         +'</div>';
 
       // ── PANNELLO LATERALE TABLET: nodi + collegamenti ──
@@ -1951,10 +1957,10 @@
         +'<div class="map-hint" style="margin-top:8px;">Tocca nodo → poi altro nodo per collegare. Doppio tocco per modificare.</div>'
         +'</div></details>';
 
-      var body = isTablet
-        ? '<div style="display:flex;gap:0;">'
-            +'<div style="flex:1;min-width:0;">'+mapArea+'</div>'
-            +'<div style="border-left:1px solid var(--border);padding:0 10px;">'+sidePanel+'</div>'
+      var body = (isTablet || isDesktop)
+        ? '<div style="display:flex;gap:0;'+(isDesktop?'height:calc(100vh - 52px);overflow:hidden;':'')+'>">'
+            +'<div style="flex:1;min-width:0;display:flex;flex-direction:column;">'+mapArea+'</div>'
+            +'<div style="width:'+(isDesktop?'280':'260')+'px;flex-shrink:0;border-left:1px solid var(--border);overflow-y:auto;padding:10px 12px;background:var(--white);">'+sidePanel+'</div>'
             +'</div>'
         : mapArea + phoneExtra;
 
@@ -2178,6 +2184,15 @@
       var c=document.getElementById('main-content');
       if(!c) return;
       var pid=S.phase<PHASES.length?PHASES[S.phase].id:'';
+      // Espandi a schermo intero per la mappa su desktop
+      var isDesktop = window.innerWidth >= 900;
+      if(pid==='reflect' && S.reflectActive !== null && isDesktop) {
+        c.style.padding = '0';
+        c.style.maxWidth = '100%';
+      } else {
+        c.style.padding = '';
+        c.style.maxWidth = '';
+      }
       if(S.phase>=PHASES.length) { c.innerHTML=renderExportHTML(); }
       else if(pid==='reflect') {
         c.innerHTML=renderReflectHTML();
