@@ -2771,6 +2771,25 @@
             +'</div>';
         }).join('');
 
+      var footer='<div style="margin-top:32px;padding-top:20px;border-top:1px solid var(--border);">'
+        +'<div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;box-shadow:var(--shadow-sm);">'
+        +'<div style="font-size:12px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">Informazioni</div>'
+        +'<div style="font-size:13px;color:var(--text2);line-height:1.7;">'
+        +'<strong style="color:var(--text);">PQ4R Studio</strong> è un\'applicazione web didattica ideata e sviluppata da '
+        +'<strong style="color:var(--text);">Eleonora Mecarelli</strong>, docente presso l\'Istituto di Istruzione Superiore '
+        +'"Francesco Ciusa" di Nuoro.'
+        +'</div>'
+        +'<div style="font-size:13px;color:var(--text2);line-height:1.7;margin-top:6px;">'
+        +'L\'app è basata sul metodo di studio attivo <strong style="color:var(--text);">PQ4R</strong> '
+        +'(Preview, Question, Read, Reflect, Recite, Review) e sulle mappe concettuali di J. Novak.'
+        +'</div>'
+        +'<div style="margin-top:12px;display:flex;align-items:center;gap:8px;">'
+        +'<span style="font-size:12px;color:var(--text3);">✉️ Info e segnalazioni:</span>'
+        +'<a href="mailto:eleonora.mecarelli@ciusa.edu.it" style="font-size:13px;font-weight:500;color:var(--blue);text-decoration:none;">eleonora.mecarelli@ciusa.edu.it</a>'
+        +'</div>'
+        +'</div>'
+        +'</div>';
+
       hc.innerHTML=warn
         +'<div style="margin-bottom:20px;">'
         +'<div style="font-family:var(--font-display);font-size:26px;color:var(--text);letter-spacing:-.02em;margin-bottom:4px;">Le tue sessioni</div>'
@@ -2781,7 +2800,8 @@
         +'<button class="btn" style="flex:1;padding:12px;font-size:13px;" onclick="importSessionJSON()">📂 Carica</button>'
         +'</div>'
         +sortBar
-        +list;
+        +list
+        +footer;
       updateBadge();
     }
 
