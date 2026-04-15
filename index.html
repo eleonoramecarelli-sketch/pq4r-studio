@@ -256,6 +256,49 @@
           font-size: 13px; line-height: 1.7; color: var(--text);
           max-height: 200px; overflow-y: auto; white-space: pre-wrap;
         }
+        .home-sidebar { transition: none; }
+        .home-grid {
+          display: grid;
+          grid-template-columns: 80px 0.4fr 2fr 80px;
+          min-height: calc(100vh - 52px);
+          width: 100%;
+        }
+        @media (max-width: 1200px) {
+          .home-grid { grid-template-columns: 0.4fr 2fr; }
+          .home-sidebar-edge { display: none !important; }
+        }
+        @media (max-width: 860px) {
+          .home-grid { grid-template-columns: 1fr; }
+          .home-sidebar { display: none !important; }
+        }
+
+        /* ── TOOLTIP ── */
+        [data-tooltip] { position: relative; }
+        [data-tooltip]:hover::after {
+          content: attr(data-tooltip);
+          position: absolute;
+          bottom: calc(100% + 6px);
+          left: 50%; transform: translateX(-50%);
+          background: var(--text);
+          color: #fff;
+          font-size: 11px; font-weight: 500;
+          padding: 4px 8px;
+          border-radius: 5px;
+          white-space: nowrap;
+          pointer-events: none;
+          z-index: 9999;
+          font-family: var(--font);
+        }
+        [data-tooltip]:hover::before {
+          content: '';
+          position: absolute;
+          bottom: calc(100% + 1px);
+          left: 50%; transform: translateX(-50%);
+          border: 5px solid transparent;
+          border-top-color: var(--text);
+          pointer-events: none;
+          z-index: 9999;
+        }
     </style>
 <body>
 <div id="debug" style="display:none;">Caricamento...</div>
@@ -903,13 +946,16 @@
     // ---- TOUCH MAP ENGINE ----
     // State per mappa attiva
     var _mapState = {
-      qi: null,          // indice domanda attiva
-      selected: null,    // id nodo selezionato
-      dragNode: null,    // id nodo in trascinamento
+      qi: null,
+      selected: null,       // id nodo selezionato (singolo)
+      selectedNodes: [],    // ids nodi selezionati (multiplo)
+      dragNode: null,
       dragStartX: 0, dragStartY: 0,
-      dragged: false,    // se true, era un drag non un tap
-      linkMode: false,   // primo nodo selezionato, attendo il secondo
-      firstNode: null    // primo nodo del collegamento
+      dragged: false,
+      linkMode: false,
+      firstNode: null,
+      // Selezione rettangolare
+      selRect: null         // {x,y,w,h} in coord SVG
     };
 
     function getMapSVG(qi) { return document.getElementById('mapsvg-'+qi); }
@@ -957,7 +1003,7 @@
       var vbX=vb.x||0, vbY=vb.y||0;
 
       // Stile mappa salvato
-      var mapBg    = map.bg        || '#F8F7F2';
+      var mapBg    = map.bg        || '#FFFFFF';
       var lineColor= map.lineColor || '#B4B2A9';
       var lineStyle= map.lineStyle || 'solid';
       var textColor= map.textColor || 'auto'; // 'auto' = usa colore nodo
@@ -1037,6 +1083,7 @@
       map.nodes.forEach(function(nd) {
         var label=nd.label||'', c=COLORS[nd.color||0];
         var isSelected=_mapState.selected===nd.id, isFirst=_mapState.firstNode===nd.id;
+        var isMultiSel=_mapState.selectedNodes.indexOf(nd.id)>=0;
         var words=label.split(' '), lines=[], cur='';
         words.forEach(function(w){ var t=(cur?cur+' ':'')+w; if(t.length>18&&cur){lines.push(cur);cur=w;}else{cur=t;} });
         if(cur) lines.push(cur);
@@ -1054,9 +1101,10 @@
         rect.setAttribute('x',nd.x-w/2);rect.setAttribute('y',nd.y-h/2);
         rect.setAttribute('width',w);rect.setAttribute('height',h);
         rect.setAttribute('rx','8');
-        rect.setAttribute('fill', isFirst?c+'55':isSelected?c+'44':c+'20');
-        rect.setAttribute('stroke', isSelected||isFirst?c:c+'88');
-        rect.setAttribute('stroke-width', isSelected||isFirst?'3':'1.8');
+        rect.setAttribute('fill', isFirst?c+'55':isSelected?c+'44':isMultiSel?c+'44':c+'20');
+        rect.setAttribute('stroke', isMultiSel?'#2563EB':isSelected||isFirst?c:c+'88');
+        rect.setAttribute('stroke-width', isMultiSel?'2.5':isSelected||isFirst?'3':'1.8');
+        if(isMultiSel) rect.setAttribute('stroke-dasharray','4,2');
         g.appendChild(rect);
 
         // Testo multiriga
@@ -1118,11 +1166,72 @@
 
       // Click on SVG background = deselect + chiudi popup immagine
       svg.addEventListener('click', function(e){
-        if(e.target===svg) {
+        if(e.target===svg || e.target.classList.contains('map-bg')) {
           var p=document.getElementById('img-popup'); if(p) p.remove();
           _mapState.selected=null; _mapState.firstNode=null; _mapState.linkMode=false;
+          _mapState.selectedNodes=[];
           renderMap(qi); updateLinkPrompt(qi);
         }
+      });
+
+      // ── SELEZIONE RETTANGOLARE (solo mouse, solo sfondo) ──
+      var _selStart = null;
+      var _selRectEl = null;
+
+      svg.addEventListener('mousedown', function(e) {
+        if(e.button !== 0) return;
+        // Solo se clicca sullo sfondo (non su un nodo)
+        if(e.target !== svg && !e.target.classList.contains('map-bg')) return;
+        e.preventDefault();
+        var pt = getSVGPoint(e, svg);
+        _selStart = pt;
+        _mapState.selectedNodes = [];
+        // Crea rettangolo visivo
+        _selRectEl = document.createElementNS('http://www.w3.org/2000/svg','rect');
+        _selRectEl.setAttribute('fill','rgba(37,99,235,.08)');
+        _selRectEl.setAttribute('stroke','#2563EB');
+        _selRectEl.setAttribute('stroke-width','1.5');
+        _selRectEl.setAttribute('stroke-dasharray','5,3');
+        _selRectEl.setAttribute('pointer-events','none');
+        svg.appendChild(_selRectEl);
+
+        function onSelMove(ev) {
+          if(!_selStart) return;
+          var pt2 = getSVGPoint(ev, svg);
+          var rx = Math.min(_selStart.x, pt2.x);
+          var ry = Math.min(_selStart.y, pt2.y);
+          var rw = Math.abs(pt2.x - _selStart.x);
+          var rh = Math.abs(pt2.y - _selStart.y);
+          _selRectEl.setAttribute('x', rx);
+          _selRectEl.setAttribute('y', ry);
+          _selRectEl.setAttribute('width', rw);
+          _selRectEl.setAttribute('height', rh);
+        }
+
+        function onSelUp(ev) {
+          document.removeEventListener('mousemove', onSelMove);
+          document.removeEventListener('mouseup', onSelUp);
+          if(!_selStart) return;
+          var pt2 = getSVGPoint(ev, svg);
+          var rx = Math.min(_selStart.x, pt2.x);
+          var ry = Math.min(_selStart.y, pt2.y);
+          var rw = Math.abs(pt2.x - _selStart.x);
+          var rh = Math.abs(pt2.y - _selStart.y);
+          // Seleziona nodi dentro il rettangolo
+          if(rw > 8 || rh > 8) {
+            var map = S.maps[qi]; if(map) {
+              _mapState.selectedNodes = map.nodes
+                .filter(function(nd){ return nd.x>=rx && nd.x<=rx+rw && nd.y>=ry && nd.y<=ry+rh; })
+                .map(function(nd){ return nd.id; });
+            }
+          }
+          _selStart = null;
+          if(_selRectEl) { _selRectEl.remove(); _selRectEl = null; }
+          if(_mapState.selectedNodes.length > 0) renderMap(qi);
+        }
+
+        document.addEventListener('mousemove', onSelMove);
+        document.addEventListener('mouseup', onSelUp);
       });
 
       // ── PINCH TO ZOOM ──────────────────────────────────────
@@ -1222,22 +1331,38 @@
           var map=S.maps[qi]; if(!map) return;
           var nd=map.nodes.find(function(n){return n.id===nodeId;});
           if(!nd) return;
-          nd.x=Math.round(pt.x-offsetX);
-          nd.y=Math.round(pt.y-offsetY);
-          var rect=g.querySelector('rect');
-          var txt=g.querySelector('text');
-          if(rect){
-            var w=parseFloat(rect.getAttribute('width'));
-            var h=parseFloat(rect.getAttribute('height'));
-            rect.setAttribute('x',nd.x-w/2);
-            rect.setAttribute('y',nd.y-h/2);
+
+          var newX = Math.round(pt.x-offsetX);
+          var newY = Math.round(pt.y-offsetY);
+          var ddx = newX - nd.x;
+          var ddy = newY - nd.y;
+
+          // Se il nodo fa parte della selezione multipla, muovi tutti
+          if(_mapState.selectedNodes.length > 1 && _mapState.selectedNodes.indexOf(nodeId) >= 0) {
+            _mapState.selectedNodes.forEach(function(id) {
+              var n = map.nodes.find(function(n){ return n.id===id; });
+              if(n) { n.x += ddx; n.y += ddy; }
+            });
+            renderMap(qi); // ridisegna tutto per il gruppo
+          } else {
+            nd.x = newX; nd.y = newY;
+            // Aggiorna DOM in-place
+            var rect=g.querySelector('rect');
+            var txt=g.querySelector('text');
+            if(rect){
+              var w=parseFloat(rect.getAttribute('width'));
+              var h=parseFloat(rect.getAttribute('height'));
+              rect.setAttribute('x',nd.x-w/2);
+              rect.setAttribute('y',nd.y-h/2);
+            }
+            if(txt){
+              txt.setAttribute('x',nd.x);
+              txt.querySelectorAll('tspan').forEach(function(ts){ ts.setAttribute('x',nd.x); });
+              txt.setAttribute('y', nd.y+4);
+            }
+            updateMapLinks(qi);
           }
-          if(txt){
-            txt.setAttribute('x',nd.x);
-            txt.querySelectorAll('tspan').forEach(function(ts){ ts.setAttribute('x',nd.x); });
-            txt.setAttribute('y', nd.y+4);
-          }
-          updateMapLinks(qi);
+          startX = pt.x; startY = pt.y; offsetX = 0; offsetY = 0;
         }
       }
 
@@ -1529,7 +1654,8 @@
       formEl.innerHTML='<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">'
         +'<strong>'+fn.label+'</strong> <span style="color:var(--text3)">→ ??? →</span> <strong>'+tn.label+'</strong></div>'
         +'<div style="display:flex;gap:6px;margin-bottom:6px;">'
-        +'<input id="link-label-input-'+qi+'" placeholder="proposizione (es: include, causa)" style="flex:1;padding:8px 10px;font-size:13px;font-family:inherit;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);-webkit-appearance:none;">'
+        +'<input id="link-label-input-'+qi+'" placeholder="proposizione (es: include, causa)" style="flex:1;padding:8px 10px;font-size:13px;font-family:inherit;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);-webkit-appearance:none;" '
+        +'onkeydown="if(event.key===\'Enter\')confirmLink('+qi+',\''+fromId+'\',\''+toId+'\');if(event.key===\'Escape\')cancelLink('+qi+');">'
         +'</div>'
         +'<div style="display:flex;gap:6px;align-items:center;">'
         +'<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer;">'
@@ -1588,19 +1714,11 @@
       var svg=document.getElementById('mapsvg-'+qi);
       var map=S.maps[qi];
       if(!svg||!map||!map.nodes.length) return;
-      var pad=60;
-      var minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
-      map.nodes.forEach(function(nd){
-        var words=(nd.label||'').split(' '),lines=[],cur='';
-        words.forEach(function(w){var t=(cur?cur+' ':'')+w;if(t.length>18&&cur){lines.push(cur);cur=w;}else{cur=t;}});
-        if(cur)lines.push(cur);if(!lines.length)lines=[''];
-        var maxLen=lines.reduce(function(m,l){return Math.max(m,l.length);},0);
-        var w=Math.max(60,maxLen*7+20)/2, h=(lines.length*14+20)/2;
-        minX=Math.min(minX,nd.x-w-pad); minY=Math.min(minY,nd.y-h-pad);
-        maxX=Math.max(maxX,nd.x+w+pad); maxY=Math.max(maxY,nd.y+h+pad);
-      });
-      var vw=Math.max(500,maxX-minX), vh=Math.max(400,maxY-minY);
-      svg.setAttribute('viewBox',minX+' '+minY+' '+vw+' '+vh);
+      // Ripristina sempre il viewBox originale (1400x900 desktop, 700x600 mobile)
+      var isDesktop = window.innerWidth >= 900;
+      var vW = isDesktop ? 1400 : 700;
+      var vH = isDesktop ? 900 : 600;
+      svg.setAttribute('viewBox','0 0 '+vW+' '+vH);
       renderMap(qi);
       renderNodePills(qi);
       saveCurrentSession();
@@ -1681,21 +1799,26 @@
       var label=inp.value.trim(); if(!label) return;
       var color=parseInt(document.getElementById('nn-color-'+qi).value||'0');
       var map=ensureMap(qi);
-      // Posiziona il nuovo nodo in un punto libero senza toccare gli altri
-      var pos = findFreePosition(map, 600, 500);
+      // Leggi il viewBox corrente per posizionare nel centro visibile
+      var svg=document.getElementById('mapsvg-'+qi);
+      var vb=svg?svg.viewBox.baseVal:null;
+      var vW=vb?vb.width:700, vH=vb?vb.height:600;
+      var vX=vb?vb.x:0,   vY=vb?vb.y:0;
+      var pos = findFreePosition(map, vW, vH, vX, vY);
       map.nodes.push({id:'n'+Date.now(),label:label,x:pos.x,y:pos.y,color:color});
       inp.value='';
       renderMap(qi); renderNodePills(qi); saveCurrentSession();
     }
 
-    function findFreePosition(map, W, H) {
-      // Primo nodo: centro in alto
-      if(map.nodes.length === 0) return {x: Math.round(W/2), y: 60};
-      // Prova una griglia di posizioni e scegli quella più lontana dagli altri nodi
-      var best = {x: W/2, y: H/2}, bestDist = 0;
+    function findFreePosition(map, W, H, offX, offY) {
+      offX = offX || 0; offY = offY || 0;
+      // Primo nodo: centro in alto nella vista corrente
+      if(map.nodes.length === 0) return {x: Math.round(offX + W/2), y: Math.round(offY + 80)};
+      // Nuovi nodi: zona destra della vista, posizione libera
+      var best = {x: offX + W*0.75, y: offY + H/2}, bestDist = 0;
       var candidates = [];
-      for(var gx=1; gx<=5; gx++) for(var gy=1; gy<=5; gy++) {
-        candidates.push({x: Math.round(W*gx/6), y: Math.round(H*gy/6)});
+      for(var gx=3; gx<=5; gx++) for(var gy=1; gy<=5; gy++) {
+        candidates.push({x: Math.round(offX + W*gx/6), y: Math.round(offY + H*gy/6)});
       }
       candidates.forEach(function(c) {
         var minDist = Infinity;
@@ -1859,27 +1982,53 @@
 
       var isTablet = window.screen.width >= 600 || window.innerWidth >= 600;
 
-      // ── BARRA TOP: navigazione + domanda + controlli tutti in una riga ──
+      // ── BARRA TOP: navigazione + domanda + controlli ──
       var topBar = '<div style="position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--border);padding:8px 12px;">'
         // Riga 1: navigazione + domanda
-        +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
-        +'<button onclick="goReflectList()" style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--blue);padding:0;flex-shrink:0;">‹</button>'
+        +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
+        +'<button onclick="goReflectList()" title="Torna alla lista" style="background:none;border:none;font-size:24px;cursor:pointer;color:var(--blue);padding:0;flex-shrink:0;line-height:1;">‹</button>'
         +'<div style="flex:1;min-width:0;">'
-        +'<div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;">Domanda '+(qi+1)+' / '+questions.length+'</div>'
+        +'<div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;">Domanda '+(qi+1)+' di '+questions.length+'</div>'
         +'<div style="font-size:13px;font-weight:700;color:var(--blue);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+q+'</div>'
         +'</div>'
         +prev+next
         +'</div>'
-        // Riga 2: aggiungi concetto + zoom + stile
-        +'<div style="display:flex;gap:6px;align-items:center;">'
-        +'<input id="nn-label-'+qi+'" placeholder="Nuovo concetto..." style="flex:1;padding:7px 10px;font-size:13px;font-family:inherit;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);-webkit-appearance:none;" onkeydown="if(event.key===\'Enter\')addNode('+qi+')">'
-        +'<select id="nn-color-'+qi+'" style="padding:7px 6px;font-size:12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);flex-shrink:0;">'+colorOpts+'</select>'
-        +'<button onclick="addNode('+qi+')" style="padding:7px 14px;background:var(--blue);color:#fff;border:none;border-radius:var(--radius-sm);font-size:16px;font-weight:700;cursor:pointer;flex-shrink:0;">+</button>'
-        +'<button onclick="zoomMap('+qi+',1.3)" style="padding:7px 10px;font-size:15px;font-weight:700;border:1px solid var(--border);border-radius:var(--radius-sm);background:#fff;cursor:pointer;flex-shrink:0;">+</button>'
-        +'<button onclick="zoomMap('+qi+',-1.3)" style="padding:7px 10px;font-size:15px;font-weight:700;border:1px solid var(--border);border-radius:var(--radius-sm);background:#fff;cursor:pointer;flex-shrink:0;">−</button>'
-        +'<button onclick="resetZoom('+qi+')" style="padding:7px 8px;font-size:11px;font-weight:600;border:1px solid var(--border);border-radius:var(--radius-sm);background:#fff;color:var(--text2);cursor:pointer;flex-shrink:0;">↺</button>'
-        +'<button onclick="doAutoLayout('+qi+')" title="Organizza automaticamente" style="padding:7px 8px;font-size:11px;font-weight:600;border:1px solid var(--border);border-radius:var(--radius-sm);background:#fff;color:var(--blue);cursor:pointer;flex-shrink:0;">⊞</button>'
-        +'<button onclick="toggleMapSettings('+qi+')" title="Sfondo e stile" style="padding:7px 8px;font-size:14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:#fff;cursor:pointer;flex-shrink:0;">🎨</button>'
+        // Riga 2: toolbar pulsanti con icone grandi
+        +'<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;">'
+
+        // Aggiungi concetto
+        +'<div style="display:flex;gap:4px;align-items:center;flex:1;min-width:180px;">'
+        +'<input id="nn-label-'+qi+'" placeholder="✏️ Scrivi un concetto..." '
+        +'style="flex:1;padding:9px 12px;font-size:13px;font-family:var(--font);border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);-webkit-appearance:none;min-width:0;" '
+        +'onkeydown="if(event.key===\'Enter\')addNode('+qi+')">'
+        +'<select id="nn-color-'+qi+'" title="Colore nodo" style="padding:9px 4px;font-size:12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);flex-shrink:0;">'+colorOpts+'</select>'
+        +'<button onclick="addNode('+qi+')" title="Aggiungi concetto (Invio)" '
+        +'style="padding:9px 16px;background:var(--blue);color:#fff;border:none;border-radius:var(--radius-sm);font-size:18px;font-weight:700;cursor:pointer;flex-shrink:0;line-height:1;">+</button>'
+        +'</div>'
+
+        // Separatore
+        +'<div style="width:1px;height:32px;background:var(--border);flex-shrink:0;margin:0 2px;"></div>'
+
+        // Zoom in
+        +'<button onclick="zoomMap('+qi+',1.3)" title="Ingrandisci" data-tooltip="Ingrandisci" '
+        +'style="padding:8px 11px;font-size:18px;font-weight:700;border:1px solid var(--border);border-radius:var(--radius-sm);background:#fff;cursor:pointer;flex-shrink:0;line-height:1;color:var(--text2);">🔍+</button>'
+        // Zoom out
+        +'<button onclick="zoomMap('+qi+',-1.3)" title="Rimpicciolisci" data-tooltip="Rimpicciolisci" '
+        +'style="padding:8px 11px;font-size:18px;font-weight:700;border:1px solid var(--border);border-radius:var(--radius-sm);background:#fff;cursor:pointer;flex-shrink:0;line-height:1;color:var(--text2);">🔍−</button>'
+        // Reset zoom
+        +'<button onclick="resetZoom('+qi+')" title="Reimposta zoom" data-tooltip="Reimposta zoom" '
+        +'style="padding:8px 11px;font-size:16px;border:1px solid var(--border);border-radius:var(--radius-sm);background:#fff;cursor:pointer;flex-shrink:0;line-height:1;">↺</button>'
+
+        // Separatore
+        +'<div style="width:1px;height:32px;background:var(--border);flex-shrink:0;margin:0 2px;"></div>'
+
+        // Autolayout
+        +'<button onclick="doAutoLayout('+qi+')" title="Organizza automaticamente" data-tooltip="Organizza" '
+        +'style="padding:8px 11px;font-size:18px;border:1px solid var(--border);border-radius:var(--radius-sm);background:#fff;cursor:pointer;flex-shrink:0;line-height:1;">⚡</button>'
+        // Stile mappa
+        +'<button onclick="toggleMapSettings('+qi+')" title="Colori e stile mappa" data-tooltip="Stile mappa" '
+        +'style="padding:8px 11px;font-size:18px;border:1px solid var(--border);border-radius:var(--radius-sm);background:#fff;cursor:pointer;flex-shrink:0;line-height:1;">🎨</button>'
+
         +'</div>'
         // Pannello impostazioni mappa (collassabile)
         +'<div id="map-settings-'+qi+'" style="display:none;margin-top:8px;padding:10px;background:var(--bg2);border-radius:var(--radius-sm);">'
@@ -1930,12 +2079,12 @@
       // ── MAPPA: occupa tutto lo spazio disponibile ──
       var isDesktop = window.innerWidth >= 900;
       var mapH = isDesktop
-        ? 'calc(100vh - 52px)'          // desktop: tutta l'altezza meno header
-        : 'calc(100vh - 200px)';        // mobile/tablet: lascia spazio ai controlli
+        ? 'calc(100vh - 52px)'
+        : 'calc(100vh - 200px)';
       var mapVW = isDesktop ? '1400' : '700';
       var mapVH = isDesktop ? '900' : '600';
 
-      var mapArea = '<div id="map-wrap-'+qi+'" style="background:var(--bg);overflow:auto;-webkit-overflow-scrolling:touch;flex:1;min-width:0;">'
+      var mapArea = '<div id="map-wrap-'+qi+'" style="position:relative;background:var(--bg);overflow:auto;-webkit-overflow-scrolling:touch;flex:1;min-width:0;">'
         +'<svg id="mapsvg-'+qi+'" viewBox="0 0 '+mapVW+' '+mapVH+'" style="min-width:'+mapVW+'px;width:100%;height:'+mapH+';min-height:400px;display:block;touch-action:none;"></svg>'
         +'</div>';
 
@@ -1960,11 +2109,50 @@
       var body = (isTablet || isDesktop)
         ? '<div style="display:flex;gap:0;'+(isDesktop?'height:calc(100vh - 52px);overflow:hidden;':'')+'>">'
             +'<div style="flex:1;min-width:0;display:flex;flex-direction:column;">'+mapArea+'</div>'
-            +'<div style="width:'+(isDesktop?'280':'260')+'px;flex-shrink:0;border-left:1px solid var(--border);overflow-y:auto;padding:10px 12px;background:var(--white);">'+sidePanel+'</div>'
+            +'<div style="width:'+(isDesktop?'280':'260')+'px;flex-shrink:0;overflow-y:auto;padding:10px 12px;background:var(--white);box-shadow:-1px 0 0 var(--border);">'+sidePanel+'</div>'
             +'</div>'
         : mapArea + phoneExtra;
 
       return topBar + body;
+    }
+
+    function toggleFab(qi) {
+      var form = document.getElementById('map-fab-form-'+qi);
+      var btn  = document.getElementById('map-fab-btn-'+qi);
+      if(!form) return;
+      var open = form.style.display !== 'none';
+      form.style.display = open ? 'none' : 'block';
+      if(btn) btn.style.transform = open ? '' : 'rotate(45deg)';
+      if(!open) {
+        setTimeout(function(){ var inp=document.getElementById('fab-label-'+qi); if(inp) inp.focus(); }, 50);
+      }
+    }
+
+    function closeFab(qi) {
+      var form = document.getElementById('map-fab-form-'+qi);
+      var btn  = document.getElementById('map-fab-btn-'+qi);
+      if(form) form.style.display = 'none';
+      if(btn) btn.style.transform = '';
+    }
+
+    function addNodeFab(qi) {
+      var inp   = document.getElementById('fab-label-'+qi);
+      var color = document.getElementById('fab-color-'+qi);
+      if(!inp) return;
+      var label = inp.value.trim();
+      if(!label) return;
+      var map = ensureMap(qi);
+      var svg = document.getElementById('mapsvg-'+qi);
+      var vb  = svg ? svg.viewBox.baseVal : null;
+      var vW  = vb ? vb.width  : 700;
+      var vH  = vb ? vb.height : 600;
+      var vX  = vb ? vb.x : 0;
+      var vY  = vb ? vb.y : 0;
+      var pos = findFreePosition(map, vW, vH, vX, vY);
+      map.nodes.push({id:'n'+Date.now(), label:label, x:pos.x, y:pos.y, color:parseInt((color&&color.value)||'0')});
+      inp.value = '';
+      inp.focus();
+      renderMap(qi); renderNodePills(qi); saveCurrentSession();
     }
 
     function saveRecite() {
@@ -2034,7 +2222,7 @@
 
       var mapSection = hasMap
         ? '<button id="recite-map-btn-'+qi+'" onclick="toggleMap('+qi+')" style="width:100%;margin-top:10px;padding:10px;font-size:13px;font-weight:500;border:1px dashed var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text2);cursor:pointer;text-align:center;">Mostra mappa ▾</button>'
-          +'<div id="recite-map-'+qi+'" style="display:none;margin-top:8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);overflow:auto;-webkit-overflow-scrolling:touch;">'
+          +'<div id="recite-map-'+qi+'" style="display:none;margin-top:8px;border-radius:var(--radius);background:var(--bg);overflow:auto;-webkit-overflow-scrolling:touch;">'
           +'<svg id="recite-mapsvg-'+qi+'" style="min-width:500px;width:100%;height:calc(100vh - 380px);min-height:320px;display:block;touch-action:none;"></svg>'
           +'</div>'
         : '';
@@ -2270,7 +2458,7 @@
       var bg=document.createElementNS(ns,'rect');
       bg.setAttribute('x',minX);bg.setAttribute('y',minY);
       bg.setAttribute('width',vw);bg.setAttribute('height',vh);
-      bg.setAttribute('fill','#F8F7F2');
+      bg.setAttribute('fill','#FFFFFF');
       svg.appendChild(bg);
 
       // Funzione helper locale che usa i nodi scalati
@@ -2728,11 +2916,12 @@
       else sessions.sort(function(a,b){return b.updatedAt-a.updatedAt;});
 
       var warn=unexp>0
-        ?'<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:var(--radius);padding:14px 16px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;">'
-          +'<div style="font-size:18px;flex-shrink:0;">⚠️</div>'
-          +'<div><div style="font-size:13px;font-weight:600;color:#92400E;margin-bottom:2px;">'
-          +unexp+' session'+(unexp>1?'i':'e')+' non salvat'+(unexp>1?'e':'a')+'</div>'
-          +'<div style="font-size:12px;color:#B45309;line-height:1.5;">Salva il file .pq4r per non perdere i tuoi dati.</div></div></div>'
+        ?'<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:var(--radius);padding:8px 12px;margin-bottom:12px;display:flex;gap:8px;align-items:center;">'
+          +'<span style="font-size:14px;flex-shrink:0;">⚠️</span>'
+          +'<span style="font-size:12px;font-weight:600;color:#92400E;white-space:nowrap;">'
+          +unexp+' session'+(unexp>1?'i':'e')+' non salvat'+(unexp>1?'e':'a')+'</span>'
+          +'<span style="font-size:11px;color:#B45309;"> · Salva il file .pq4r</span>'
+          +'</div>'
         :'';
 
       var sortBar='<div style="display:flex;gap:6px;align-items:center;margin-bottom:12px;">'
@@ -2774,7 +2963,7 @@
             +'<span style="font-size:11px;font-weight:600;color:'+sc+';min-width:28px;text-align:right;">'+score+'%</span>'
             +'</div>'
             +'<div style="display:flex;gap:6px;align-items:center;">'
-            +'<button class="btn primary" style="flex:1;padding:9px 14px;font-size:13px;" onclick="openSession(\''+s.id+'\')">Riprendi →</button>'
+            +'<button class="btn primary" style="padding:7px 16px;font-size:12px;" onclick="openSession(\''+s.id+'\')">Riprendi →</button>'
             +'<button onclick="toggleSessionMenu(\''+s.id+'\')" style="padding:9px 13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--white);font-size:14px;line-height:1;cursor:pointer;color:var(--text3);">•••</button>'
             +'</div>'
             +'<div id="smenu-'+s.id+'" style="display:none;margin-top:8px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;">'
@@ -2810,13 +2999,12 @@
         +'<div style="font-family:var(--font-display);font-size:26px;color:var(--text);letter-spacing:-.02em;margin-bottom:4px;">Le tue sessioni</div>'
         +'<div style="font-size:13px;color:var(--text3);">Metodo PQ4R · Studio attivo</div>'
         +'</div>'
-        +'<div style="display:flex;gap:8px;margin-bottom:16px;">'
-        +'<button class="btn primary" style="flex:2;padding:12px;font-size:14px;" onclick="newSession()">+ Nuova sessione</button>'
-        +'<button class="btn" style="flex:1;padding:12px;font-size:13px;" onclick="importSessionJSON()">📂 Carica</button>'
+        +'<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:nowrap;">'
+        +'<button class="btn primary" style="flex:2;padding:10px;font-size:13px;white-space:nowrap;" onclick="newSession()">+ Nuova sessione</button>'
+        +'<button class="btn" style="flex:1;padding:10px;font-size:13px;white-space:nowrap;" onclick="importSessionJSON()">📂 Carica</button>'
         +'</div>'
         +sortBar
-        +list
-        +footer;
+        +list;
       updateBadge();
     }
 
@@ -3027,19 +3215,108 @@
       +'<div id="drawer-session-name">PQ4R Studio</div>'
       +'<div id="drawer-progress">Completezza: 0%</div>'
       +'<div id="drawer-progress-bar"><div id="drawer-progress-fill" style="width:0%"></div></div>'
+      +'<div style="display:flex;gap:6px;margin-top:12px;">'
+      +'<button onclick="closeDrawer();showHome();" style="flex:1;padding:8px 10px;border-radius:var(--radius-sm);border:none;background:rgba(255,255,255,.15);color:#fff;font-size:12px;cursor:pointer;font-family:var(--font);text-align:center;">⌂ Home</button>'
+      +'<button id="guided-btn" onclick="toggleGuidedMode()" style="flex:1;padding:8px 10px;border-radius:var(--radius-sm);border:none;background:rgba(255,255,255,.15);color:#fff;font-size:12px;cursor:pointer;font-family:var(--font);text-align:center;opacity:0.7;">📚 Guidata</button>'
+      +'</div>'
       +'</div>'
       +'<div id="drawer-phases"></div>'
-      +'<div id="drawer-footer">'
-      +'<button id="guided-btn" onclick="toggleGuidedMode()" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);font-size:13px;cursor:pointer;text-align:left;color:var(--text2);font-family:var(--font);">📚 Modalità Guidata</button>'
-      +'<button onclick="closeDrawer();showHome();" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);font-size:13px;cursor:pointer;text-align:left;color:var(--text2);font-family:var(--font);">⌂ Home</button>'
+      +'<div id="drawer-footer" style="padding:14px;border-top:1px solid var(--border);">'
+      +'<div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;">PQ4R Studio</div>'
+      +'<div style="font-size:11px;color:var(--text2);line-height:1.6;margin-bottom:8px;">'
+      +'Ideata e sviluppata da <strong style="color:var(--text);">Eleonora Mecarelli</strong><br>'
+      +'IIS "Francesco Ciusa" di Nuoro<br>'
+      +'Basata sul metodo PQ4R (Thomas &amp; Robinson, 1972)<br>'
+      +'e sulle mappe concettuali di J. Novak'
+      +'</div>'
+      +'<a href="mailto:eleonora.mecarelli@ciusa.edu.it" style="font-size:11px;color:var(--blue);text-decoration:none;">✉️ eleonora.mecarelli@ciusa.edu.it</a><br>'
+      +'<a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" style="font-size:10px;color:var(--text3);text-decoration:none;margin-top:4px;display:inline-block;">© GNU GPL v3</a>'
       +'</div>'
       +'</div>'
-      +'<div id="home-view" style="padding:20px 16px;max-width:600px;margin:0 auto;"><div id="home-content"></div></div>'
+      +'<div id="home-view" style="display:none;min-height:calc(100vh - 52px);">'
+      +'<div class="home-grid">'
+
+      // ── COLONNA 1: grafica sinistra (80px) ──
+      +'<div class="home-sidebar home-sidebar-edge" style2="x" style="position:sticky;top:52px;height:calc(100vh - 52px);overflow:hidden;">'
+      +'<svg width="100%" height="100%" viewBox="0 0 80 800" preserveAspectRatio="xMidYMid slice" style="display:block;height:100%;">'
+      +'<rect x="0" y="0" width="80" height="800" fill="#EFF6FF"/>'
+      +'<polygon points="0,0 80,0 0,120" fill="#93C5FD" opacity="0.6"/>'
+      +'<polygon points="0,300 80,420 0,480" fill="#C4B5FD" opacity="0.55"/>'
+      +'<polygon points="0,620 80,800 0,800" fill="#C4B5FD" opacity="0.5"/>'
+      +'<circle cx="40" cy="180" r="55" fill="#6EE7B7" opacity="0.28"/>'
+      +'<circle cx="-5" cy="380" r="50" fill="#FCA5A5" opacity="0.22"/>'
+      +'<circle cx="60" cy="580" r="45" fill="#7DD3FC" opacity="0.28"/>'
+      +'<polygon points="0,90 70,160 0,230" fill="#A5B4FC" opacity="0.28"/>'
+      +'<polygon points="80,0 80,80 20,0" fill="#FDE68A" opacity="0.45"/>'
+      +'<circle cx="20" cy="45" r="10" fill="#FDE68A" opacity="0.8"/>'
+      +'<circle cx="60" cy="80" r="7" fill="#FCA5A5" opacity="0.75"/>'
+      +'<circle cx="35" cy="420" r="5" fill="white" opacity="0.5"/>'
+      +'<line x1="0" y1="200" x2="80" y2="360" stroke="#60A5FA" stroke-width="0.8" opacity="0.18"/>'
+      +'</svg>'
+      +'</div>'
+
+      // ── COLONNA 2: info metodo PQ4R ──
+      +'<div class="home-sidebar" style="position:sticky;top:52px;height:calc(100vh - 52px);overflow-y:auto;background:var(--white);border-right:1px solid var(--border);padding:20px 14px;">'
+      +'<div style="font-family:var(--font-display);font-size:17px;color:var(--text);letter-spacing:-.02em;margin-bottom:4px;">Metodo PQ4R</div>'
+      +'<div style="font-size:10px;color:var(--text3);margin-bottom:16px;line-height:1.4;">Thomas &amp; Robinson, 1972<br>Mappe concettuali di J. Novak</div>'
+      + [
+          ['P','Panoramica','#2563EB','Scorri titoli, immagini e parole chiave prima di leggere.'],
+          ['Q','Domande','#7C3AED','Trasforma ogni sezione in una domanda focale.'],
+          ['L','Lettura','#0891B2','Leggi attivamente cercando risposta alle domande.'],
+          ['R','Riflessione','#059669','Costruisci mappe concettuali per ogni domanda.'],
+          ['R','Ripetizione','#DB2777','Rispondi a memoria senza guardare gli appunti.'],
+          ['R','Revisione','#D97706','Sintetizza concetti, connessioni e lacune.'],
+        ].map(function(f){
+          return '<div style="margin-bottom:12px;">'
+            +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">'
+            +'<div style="width:24px;height:24px;border-radius:50%;background:'+f[2]+';color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">'+f[0]+'</div>'
+            +'<div style="font-size:12px;font-weight:600;color:'+f[2]+';">'+f[1]+'</div>'
+            +'</div>'
+            +'<div style="font-size:11px;color:var(--text2);line-height:1.5;padding-left:32px;">'+f[3]+'</div>'
+            +'</div>';
+        }).join('')
+      +'</div>'
+
+      // ── COLONNA 3: sessioni ──
+      +'<div style="padding:20px 20px;overflow-y:auto;"><div id="home-content"></div></div>'
+
+      // ── COLONNA 4: grafica destra (80px) ──
+      +'<div class="home-sidebar home-sidebar-edge" style="width:80px;position:sticky;top:52px;height:calc(100vh - 52px);overflow:hidden;">'
+      +'<svg width="100%" height="100%" viewBox="0 0 80 800" preserveAspectRatio="xMidYMid slice" style="display:block;height:100%;">'
+      +'<rect x="0" y="0" width="80" height="800" fill="#EFF6FF"/>'
+      +'<polygon points="80,0 0,0 80,120" fill="#93C5FD" opacity="0.6"/>'
+      +'<polygon points="80,300 0,420 80,480" fill="#C4B5FD" opacity="0.55"/>'
+      +'<polygon points="80,620 0,800 80,800" fill="#C4B5FD" opacity="0.5"/>'
+      +'<circle cx="40" cy="180" r="55" fill="#6EE7B7" opacity="0.28"/>'
+      +'<circle cx="85" cy="380" r="50" fill="#FCA5A5" opacity="0.22"/>'
+      +'<circle cx="20" cy="580" r="45" fill="#7DD3FC" opacity="0.28"/>'
+      +'<polygon points="80,90 10,160 80,230" fill="#A5B4FC" opacity="0.28"/>'
+      +'<polygon points="0,0 0,80 60,0" fill="#FDE68A" opacity="0.45"/>'
+      +'<circle cx="60" cy="45" r="10" fill="#FDE68A" opacity="0.8"/>'
+      +'<circle cx="20" cy="80" r="7" fill="#FCA5A5" opacity="0.75"/>'
+      +'<circle cx="45" cy="420" r="5" fill="white" opacity="0.5"/>'
+      +'<line x1="80" y1="200" x2="0" y2="360" stroke="#60A5FA" stroke-width="0.8" opacity="0.18"/>'
+      +'</svg>'
+      +'</div>'
+
+      +'</div>'
+      +'</div>'
       +'<div id="main-view" style="display:none;"><div class="content" id="main-content"></div></div>';
 
     document.getElementById('debug-bar').textContent = 'Pronto';
     applyFontSize();
     document.body.insertAdjacentHTML('beforeend', mathKeyboardHTML());
+
+    // ---- AVVISO CHIUSURA ----
+    window.addEventListener('beforeunload', function(e) {
+      var unsaved = loadAllSessions().filter(function(s){ return !s.exported; });
+      if(unsaved.length > 0) {
+        e.preventDefault();
+        e.returnValue = '';
+        return '';
+      }
+    });
+
     showHome();
 </script>
 </body>
